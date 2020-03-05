@@ -15,6 +15,7 @@ my $output = $test_tmp . "/t";
 my $dir = Cwd::getcwd();
 my @fullnames = map { Cwd::abs_path($_) } @ARGV;
 
+my $exit_code = 0;
 my $test_count = 0;
 my @failed_files;
 
@@ -22,6 +23,7 @@ File::Path::mkpath($output);
 chdir($root);
 
 for my $filename (@fullnames) {
+  last if $exit_code;
   next unless $filename;
   next if -d $filename || $filename =~ /\.(h|txt|pl)$/i;
 
@@ -37,10 +39,9 @@ for my $filename (@fullnames) {
   my $test_filename = ($filename =~ /\/tests\/(.+)/) ? $1 : Digest::MD5::md5_hex($contents);
   $test_filename =~ s/[\W_]+/-/g;
 
-  my @common_opts = ("-Wall -pedantic -fsanitize=address -I.", @args);
+  my @common_opts = ("-Wall -pedantic -fsanitize=address -I. -Itests", @args);
   push @common_opts, "-lstdc++ -std=c++11";
-  push @common_opts, "-include $root/tests/test.h";
-  push @common_opts, $filename;
+  push @common_opts, shell_escape($filename);
 
   my $file_failed = 0;
   $test_count += 1;
@@ -50,20 +51,22 @@ for my $filename (@fullnames) {
 
   for my $variant (@variants) {
     $variant_index += 1;
-    my $output_name = "$output/$test_filename" . ((@variants > 1) ? "-$variant_index" : "");
+    my $output_name = shell_escape("$output/$test_filename" . ((@variants > 1) ? "-$variant_index" : ""));
 
     my @cmd = ($cc, @common_opts);
     push @cmd, $variant if $variant;
     push @cmd, "-o $output_name";
     push @cmd, "&& $output_name";
 
-    say "==> $0 $filename" . ($variant ? " [$variant]" : "");
+    say "==> $0 " . shell_escape($filename) . ($variant ? " [$variant]" : "");
 
     my $cmd = join(' ', @cmd);
-    if (0 != system($cmd)) {
+    my $ret = system($cmd);
+    if ($ret) {
+      say "\n[$ret] $cmd\n";
+      last if 2 != $ret;
       $file_failed = 1;
-      say "\nFailed command: $cmd\n";
-      last;
+      $exit_code = $ret;
     }
   }
 
@@ -78,7 +81,6 @@ write_file($test_tmp . "/t-failed", join(' ', @failed_files));
 if (@failed_files) {
   say "There were test failures:";
   say " * $_" for @failed_files;
-  exit(-1);
 }
 elsif ($test_count > 0) {
   say "All tests OK";
@@ -86,6 +88,8 @@ elsif ($test_count > 0) {
 else {
   say "No tests to run";
 }
+
+exit($exit_code);
 
 sub read_file {
   my $filename = shift;
@@ -105,4 +109,13 @@ sub scan_source {
   my @result;
   push @result, $1 while $contents =~ /^\s*\/\/[ \t]*$type[ \t]*([^\r\n]+)/mg;
   return @result;
+}
+
+sub shell_escape {
+  my $string = shift;
+  return "''" if !defined $string || length($string) == 0;
+  die "No way to quote string containing null (\\000) bytes" if $string =~ /\x00/;
+  return $string if $string =~ /^[\@\w\/\-\.]+$/;
+  $string =~ s/'/'\\''/g;
+  return "'$string'";
 }

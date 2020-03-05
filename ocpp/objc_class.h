@@ -5,10 +5,18 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <objc/objc.h>
-#include <objc/objc-runtime.h>
+#include <objc/runtime.h>
 
 namespace ocpp {
 
+#if __OBJC__
+  template<typename T>
+  constexpr const char* ocpp_encode_type_cpp(T*) {
+    return @encode(T);
+  }
+
+  #define OCPP_ENCODE_TYPE(T) @encode(T)
+#else
   #define OCPP_DEFINE_CPP_ENCODE(T,R) \
     constexpr const char* ocpp_encode_type_cpp(T*) { return R; }
 
@@ -16,9 +24,6 @@ namespace ocpp {
   OCPP_DEFINE_CPP_ENCODE(void*, "^")
   OCPP_DEFINE_CPP_ENCODE(::id, "@")
 
-#if __OBJC__
-  #define OCPP_ENCODE_TYPE(T) @encode(T)
-#else
   #define OCPP_ENCODE_TYPE(T) (ocpp_encode_type_cpp((T*)nullptr))
 #endif
 
@@ -54,7 +59,7 @@ namespace ocpp {
   public:
     template<typename R, typename... P>
     function_types_encoder(R(*impl)(P...)) {
-      list_encoder<R,P...>::encode(_buffer) = 0;
+      *list_encoder<R,P...>::encode(_buffer) = 0;
     }
 
     operator const char* () const {
@@ -83,6 +88,9 @@ namespace ocpp {
   >
   class objc_class {
   public:
+    typedef typename objc_class_extra_bytes<ivars_type>::reference_type ivars_reference_type;
+    typedef typename objc_class_extra_bytes<cvars_type>::reference_type cvars_reference_type;
+
     objc_class()
       : objc_class(objc_getClass("NSObject"))
     {}
@@ -116,13 +124,13 @@ namespace ocpp {
     template<typename F>
     bool add_method(SEL selector, const F& impl) {
       auto* ptr = +impl;
-      return class_addMetod(selector, ptr, function_types_encoder<>(ptr));
+      return class_addMethod(_class, selector, (IMP)ptr, function_types_encoder<>(ptr));
     }
 
     template<typename F>
     bool add_method(SEL selector, const F& impl, const char* types) {
       auto* ptr = +impl;
-      return class_addMetod(selector, ptr, types);
+      return class_addMethod(_class, selector, (IMP)ptr, types);
     }
 
     template<typename F>
@@ -135,13 +143,6 @@ namespace ocpp {
       return add_method(sel_registerName(selector_name), impl, types);
     }
 
-    // template<typename Invocator, typename R, typename... P>
-    // bool add_ivars_invocator(SEL selector) {
-    //   return add_method(selector, [](id self, SEL, P... args) -> R {
-    //     return Invocator::invoke(get_ivars(self), args...);
-    //   });
-    // }
-
     bool add_protocol(Protocol* protocol) {
       return class_addProtocol(_class, protocol);
     }
@@ -152,6 +153,10 @@ namespace ocpp {
 
     void* alloc() const {
       return class_createInstance(_class, objc_class_extra_bytes<ivars_type>::size);
+    }
+
+    static ivars_reference_type get_ivars(id self) {
+      return (ivars_reference_type)object_getIndexedIvars(self);
     }
 
   protected:
